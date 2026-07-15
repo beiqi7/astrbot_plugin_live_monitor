@@ -1,0 +1,137 @@
+{
+  "monitor_rooms": {
+    "description": "监控直播间（点添加）",
+    "type": "template_list",
+    "hint": "在这里添加要监控的直播间。还需在下方填写「推送目标」才能发到 QQ 群。也可在群里用 /livecheck add。",
+    "obvious_hint": true,
+    "default": [],
+    "templates": {
+      "live_room": {
+        "name": "直播间",
+        "hint": "添加一个虎牙/斗鱼/抖音/B站直播间",
+        "display_item": "nickname",
+        "hide_hint_in_list": true,
+        "items": {
+          "platform": {
+            "description": "平台",
+            "type": "string",
+            "options": ["bilibili", "douyu", "huya", "douyin"],
+            "default": "bilibili",
+            "hint": "bilibili=B站 · douyu=斗鱼 · huya=虎牙 · douyin=抖音",
+            "obvious_hint": true
+          },
+          "room_id": {
+            "description": "房间号",
+            "type": "string",
+            "default": "",
+            "hint": "B站/斗鱼/虎牙填房间号；抖音填 live.douyin.com 链接里的 web_rid 数字",
+            "obvious_hint": true
+          },
+          "nickname": {
+            "description": "自定义昵称",
+            "type": "string",
+            "default": "",
+            "hint": "可选，如「某某主播」；不填则用平台原名。列表里也会显示这个名字。"
+          }
+        }
+      }
+    }
+  },
+  "rooms_text": {
+    "description": "批量添加直播间（可选）",
+    "type": "text",
+    "hint": "每行一个，方便批量粘贴。格式：平台 房间号 [昵称]\n示例：\nbilibili 6 英雄联盟赛事\n斗鱼 9999\ndouyin 369324308707 某某\n与上方「监控直播间」合并生效。",
+    "default": "",
+    "obvious_hint": true
+  },
+  "notify_targets": {
+    "description": "推送目标（QQ 群/会话）",
+    "type": "text",
+    "hint": "设置里添加的直播间，开播/关播会推到这里。每行一个：\n1) 直接填 QQ 群号，如 123456789\n2) 或完整会话 ID（群里发 /livecheck testpush 可查看）\n以 # 开头的行忽略。",
+    "default": "",
+    "obvious_hint": true
+  },
+  "umo_prefix": {
+    "description": "群号转会话前缀",
+    "type": "string",
+    "hint": "推送目标只写群号时，自动拼成：前缀+群号。OneBot/NapCat 默认 aiocqhttp:GroupMessage:",
+    "default": "aiocqhttp:GroupMessage:",
+    "obvious_hint": true
+  },
+  "check_interval": {
+    "description": "轮询间隔（秒）",
+    "type": "int",
+    "hint": "检查直播状态的时间间隔，建议 30～120。过短可能被平台限流。",
+    "default": 60,
+    "obvious_hint": true
+  },
+  "enable_cover": {
+    "description": "发送封面图",
+    "type": "bool",
+    "hint": "开播/关播通知是否附带直播间封面",
+    "default": true,
+    "obvious_hint": true
+  },
+  "notify_offline": {
+    "description": "关播通知",
+    "type": "bool",
+    "hint": "主播下播时是否推送消息",
+    "default": true,
+    "obvious_hint": true
+  },
+  "enable_llm": {
+    "description": "开播文案使用 LLM（可选，默认关）",
+    "type": "bool",
+    "hint": "关闭时只用下方「开播消息模板」。开启后调用 LLM 生成开播文案，失败自动回退模板。不需要 LLM 时请保持关闭。",
+    "default": false,
+    "obvious_hint": true
+  },
+  "llm_provider_id": {
+    "description": "LLM 提供商 ID（可选）",
+    "type": "string",
+    "hint": "仅 enable_llm=开启 时生效。留空=使用 AstrBot 当前默认对话模型；填写则可指定某个提供商 ID（在「模型提供商」页面查看）。",
+    "default": "",
+    "obvious_hint": true
+  },
+  "llm_prompt": {
+    "description": "LLM 提示词模板",
+    "type": "text",
+    "hint": "仅 enable_llm=开启 时使用。变量：{platform} {nickname} {real_name} {title} {room_id} {url}",
+    "default": "你是一只会刷直播的二次元群聊猫娘小助手，要用抽象、中二又可爱的二次元口吻写开播推送。\n下面是情报：\n- 平台：{platform}\n- 主播昵称：{nickname}\n- 主播真名/ID 相关：{real_name}（房间号 {room_id}）\n- 直播标题：{title}\n- 直播间链接：{url}\n\n写作要求：\n1. 用二次元抽象话术介绍：封面图氛围（可以脑补画面感）、主播称呼/房间号、以及直播标题含义。\n2. 语气可以混搭：喵、捏、哒、呜呜、爆了、开大、登场、本场、推、沉浸式、草、好耶、冲等，但不要脏话和人身攻击。\n3. 3～6 行，短句为主，可带 emoji，像群友在喊人看播。\n4. 必须自然点出主播名/昵称、房间号或 ID、直播标题；可以提一句「封面已附上」类表述。\n5. 结尾给直播链接或引导点开。\n6. 只输出推送正文，不要解释、不要标题、不要 markdown 代码块。"
+  },
+  "live_template": {
+    "description": "开播消息模板",
+    "type": "text",
+    "hint": "默认使用本模板。开启 LLM 且生成成功时用 LLM 结果。变量：{platform} {nickname} {real_name} {title} {room_id} {url} {time}",
+    "default": "✨ {nickname} 开始直播了喵～\n━━━━━━━━━━━━\n📺 从 {platform} 结界传送过来的信号\n🎬 本场标题：{title}\n🆔 主播房间：{room_id}\n⏰ 开播时刻：{time}\n🔗 传送门：{url}\n━━━━━━━━━━━━\n封面已加载好啦，速速入场围观捏！"
+  },
+  "offline_template": {
+    "description": "关播消息模板",
+    "type": "text",
+    "hint": "变量：{platform} {nickname} {real_name} {title} {room_id} {url} {time} {duration}",
+    "default": "🌙 {nickname} 今天播完啦喵…\n━━━━━━━━━━━━\n📺 平台：{platform}\n🆔 房间：{room_id}\n⏱️ 本场陪伴：{duration}\n⏰ 下播时间：{time}\n━━━━━━━━━━━━\n直播结界暂时关闭，下次再见捏～"
+  },
+  "at_all_on_live": {
+    "description": "开播时 @全体成员",
+    "type": "bool",
+    "hint": "全局默认；群内可用指令覆盖。需要机器人具备 @全体 权限。",
+    "default": false
+  },
+  "bilibili_cookie": {
+    "description": "B站 Cookie（可选）",
+    "type": "string",
+    "hint": "提高接口稳定性，可从浏览器复制",
+    "default": ""
+  },
+  "douyin_cookie": {
+    "description": "抖音 Cookie（可选）",
+    "type": "string",
+    "hint": "抖音风控较严时建议填写；至少需要能访问 live.douyin.com",
+    "default": ""
+  },
+  "request_timeout": {
+    "description": "请求超时（秒）",
+    "type": "float",
+    "default": 12
+  }
+}

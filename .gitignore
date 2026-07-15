@@ -1,0 +1,13 @@
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+data/*.json
+data/**/*
+!data/.gitkeep
+*.log
+.DS_Store
+.idea/
+.vscode/
+*.zip
