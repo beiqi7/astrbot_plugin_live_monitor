@@ -17,7 +17,13 @@ from .core.config_sync import sync_rooms_from_config
 from .core.monitor import LiveMonitor
 from .core.notifier import Notifier
 from .core.storage import DataManager, RoomRecord, room_key
-from .platforms import PLATFORM_NAMES, check_room, list_platforms, normalize_platform
+from .platforms import (
+    PLATFORM_NAMES,
+    check_room,
+    extract_room_id,
+    list_platforms,
+    normalize_platform,
+)
 
 
 HELP_TEXT = """✨ livecheck · 多平台直播结界
@@ -43,7 +49,8 @@ HELP_TEXT = """✨ livecheck · 多平台直播结界
 /livecheck help
 
 【平台】bilibili/b站 · douyu/斗鱼 · huya/虎牙 · douyin/抖音
-抖音填 live.douyin.com 的 web_rid 数字喵
+房间号可直接粘贴直播间链接，本喵会自动提取喵
+抖音填 live.douyin.com 的 web_rid 数字或整段链接
 """
 
 
@@ -71,7 +78,7 @@ CFG_KEYS = [
     "astrbot_plugin_live_monitor",
     "Grok",
     "多平台直播监控 livecheck：虎牙/斗鱼/抖音/B站 开播关播主动推送",
-    "1.3.0",
+    "1.4.0",
 )
 class LiveMonitorPlugin(Star):
     def __init__(self, context: Context, config: AstrBotConfig = None):
@@ -204,9 +211,9 @@ class LiveMonitorPlugin(Star):
             yield event.plain_result(f"⚠️ 未知平台「{platform}」\n支持: {plats}")
             return
 
-        room_id = str(room_id).strip()
+        room_id = extract_room_id(str(room_id).strip(), pid)
         if not room_id:
-            yield event.plain_result("⚠️ 请填写房间号")
+            yield event.plain_result("⚠️ 请填写房间号或直播间链接")
             return
 
         extra = self._extra_nickname(event, platform, room_id)
@@ -305,7 +312,7 @@ class LiveMonitorPlugin(Star):
         if not pid:
             yield event.plain_result(f"⚠️ 未知平台「{platform}」")
             return
-        room_id = str(room_id).strip()
+        room_id = extract_room_id(str(room_id).strip(), pid)
         rec = self.data.get(pid, room_id)
         if not rec:
             yield event.plain_result(f"⚠️ 未找到 {PLATFORM_NAMES.get(pid, pid)} 房间 {room_id}")
@@ -342,7 +349,7 @@ class LiveMonitorPlugin(Star):
         if not pid:
             yield event.plain_result(f"⚠️ 未知平台「{platform}」")
             return
-        room_id = str(room_id).strip()
+        room_id = extract_room_id(str(room_id).strip(), pid)
         rec = self.data.get(pid, room_id)
         if not rec:
             yield event.plain_result("⚠️ 房间不在监控列表中")
@@ -393,7 +400,7 @@ class LiveMonitorPlugin(Star):
         if not pid:
             yield event.plain_result(f"⚠️ 未知平台「{platform}」")
             return
-        room_id = str(room_id).strip()
+        room_id = extract_room_id(str(room_id).strip(), pid)
         nick = self._extra_nickname(event, platform, room_id) or (nickname or "").strip()
         if not nick:
             yield event.plain_result("⚠️ 昵称不能为空")
@@ -417,7 +424,7 @@ class LiveMonitorPlugin(Star):
         if not pid:
             yield event.plain_result(f"⚠️ 未知平台「{platform}」")
             return
-        room_id = str(room_id).strip()
+        room_id = extract_room_id(str(room_id).strip(), pid)
         cfg = self._cfg_dict()
         info = await check_room(
             pid,
@@ -476,7 +483,7 @@ class LiveMonitorPlugin(Star):
         if not pid:
             yield event.plain_result(f"⚠️ 未知平台「{platform}」")
             return
-        room_id = str(room_id).strip()
+        room_id = extract_room_id(str(room_id).strip(), pid)
         rec = self.data.get(pid, room_id)
         umo = event.unified_msg_origin
         if not rec or umo not in rec.subscribers:
@@ -509,7 +516,7 @@ class LiveMonitorPlugin(Star):
         if not pid:
             yield event.plain_result(f"⚠️ 未知平台「{platform}」")
             return
-        room_id = str(room_id).strip()
+        room_id = extract_room_id(str(room_id).strip(), pid)
         rec = self.data.get(pid, room_id)
         umo = event.unified_msg_origin
         if not rec or umo not in rec.subscribers:

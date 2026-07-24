@@ -55,6 +55,7 @@ AstrBot 多平台直播监控插件 · 指令前缀 **`/livecheck`**
 | `/livecheck poll` | 管理员立即轮询 |
 
 平台：`bilibili/b站` `douyu/斗鱼` `huya/虎牙` `douyin/抖音`  
+房间号可直接粘贴直播间链接（自动提取）。  
 抖音房间号 = `live.douyin.com/<web_rid>` 中的数字。
 
 ## 默认开播模板
@@ -79,7 +80,7 @@ AstrBot 多平台直播监控插件 · 指令前缀 **`/livecheck`**
 | `enable_cover` | true | 封面 |
 | `notify_offline` | true | 关播通知 |
 | `enable_llm` | **false** | 可选 LLM 开播文案 |
-| `llm_provider_id` | 空 | 指定模型，空=默认 |
+| `llm_provider_id` | 空 | 下拉选择已配置的提供商，空=默认 |
 | `live_template` / `offline_template` | 二次元模板 | 可自定义 |
 | `llm_prompt` | 二次元猫娘提示词 | 仅 LLM 开启时 |
 
@@ -87,7 +88,10 @@ AstrBot 多平台直播监控插件 · 指令前缀 **`/livecheck`**
 
 ## 版本
 
-- **v1.3.0** 插件设置页可添加直播间 + 推送目标群；`/livecheck sync`
+- **v1.4.0** 轮询健壮性：瞬时错误指数退避重试；连续失败房间冷却退避；轮询刷新批量落盘；轮询加抖动  
+  设置页优化：LLM 提供商改用原生下拉（`select_provider`）；平台下拉带中文名（`labels`）；LLM 字段按开关条件显示（`condition`）  
+  采集/输出：支持粘贴直播间链接；封面 URL 规范化；推送封面失败回退纯文本；多会话并发推送与发送重试
+- v1.3.0 插件设置页可添加直播间 + 推送目标群；`/livecheck sync`
 - v1.2.0 二次元默认文案与 LLM prompt；主动推送加固
 - v1.1.0 前缀 livecheck；LLM 可选
 - v1.0.0 首发

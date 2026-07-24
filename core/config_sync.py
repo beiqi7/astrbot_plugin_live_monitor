@@ -7,7 +7,7 @@ from typing import Any, Callable
 
 from astrbot.api import logger
 
-from ..platforms import check_room, normalize_platform
+from ..platforms import check_room, extract_room_id, normalize_platform
 from .storage import DataManager, RoomRecord, room_key
 
 
@@ -43,7 +43,7 @@ def parse_rooms_from_config(cfg: dict[str, Any]) -> list[dict[str, str]]:
 
     def _add(platform: str, room_id: str, nickname: str = "") -> None:
         pid = normalize_platform(platform) or (platform or "").strip().lower()
-        rid = str(room_id or "").strip()
+        rid = extract_room_id(str(room_id or "").strip(), pid)
         if not pid or not rid:
             return
         if pid not in ("bilibili", "douyu", "huya", "douyin"):

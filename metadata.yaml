@@ -1,6 +1,6 @@
 name: astrbot_plugin_live_monitor
 display_name: 多平台直播监控
 desc: 指令 /livecheck。设置页可添加直播间与推送群；监控虎牙/斗鱼/抖音/B站开播关播；二次元模板、封面、可选 LLM。
-version: v1.3.0
+version: v1.4.0
 author: Grok
 repo: https://github.com/example/astrbot_plugin_live_monitor

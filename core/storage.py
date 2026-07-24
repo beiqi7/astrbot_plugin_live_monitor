@@ -56,6 +56,7 @@ class DataManager:
         self.data_path = Path(data_path)
         self.data_path.parent.mkdir(parents=True, exist_ok=True)
         self.rooms: dict[str, RoomRecord] = {}
+        self._dirty: bool = False
         self.load()
 
     def load(self) -> None:
@@ -82,8 +83,14 @@ class DataManager:
                 json.dumps(payload, ensure_ascii=False, indent=2),
                 encoding="utf-8",
             )
+            self._dirty = False
         except Exception as e:
             logger.error(f"保存直播监控数据失败: {e}")
+
+    def flush(self) -> None:
+        """仅当有未落盘修改时才写盘，用于轮询末尾批量持久化。"""
+        if self._dirty:
+            self.save()
 
     def get(self, platform: str, room_id: str) -> RoomRecord | None:
         return self.rooms.get(room_key(platform, room_id))
@@ -156,6 +163,7 @@ class DataManager:
         cover_url: str = "",
         url: str = "",
         live_start_ts: float | None = None,
+        persist: bool = True,
     ) -> RoomRecord | None:
         rec = self.get(platform, room_id)
         if not rec:
@@ -172,7 +180,10 @@ class DataManager:
         rec.last_check_ts = time.time()
         if live_start_ts is not None:
             rec.live_start_ts = live_start_ts
-        self.save()
+        if persist:
+            self.save()
+        else:
+            self._dirty = True
         return rec
 
     def rooms_for_session(self, umo: str) -> list[RoomRecord]:

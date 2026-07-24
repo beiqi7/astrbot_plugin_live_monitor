@@ -16,6 +16,7 @@
             "description": "平台",
             "type": "string",
             "options": ["bilibili", "douyu", "huya", "douyin"],
+            "labels": ["B站", "斗鱼", "虎牙", "抖音"],
             "default": "bilibili",
             "hint": "bilibili=B站 · douyu=斗鱼 · huya=虎牙 · douyin=抖音",
             "obvious_hint": true
@@ -87,17 +88,24 @@
     "obvious_hint": true
   },
   "llm_provider_id": {
-    "description": "LLM 提供商 ID（可选）",
+    "description": "LLM 提供商（可选）",
     "type": "string",
-    "hint": "仅 enable_llm=开启 时生效。留空=使用 AstrBot 当前默认对话模型；填写则可指定某个提供商 ID（在「模型提供商」页面查看）。",
+    "_special": "select_provider",
+    "hint": "仅「开播文案使用 LLM」开启时生效。留空=使用 AstrBot 当前默认对话模型；选择则指定某个已配置的提供商。",
     "default": "",
-    "obvious_hint": true
+    "obvious_hint": true,
+    "condition": {
+      "enable_llm": true
+    }
   },
   "llm_prompt": {
     "description": "LLM 提示词模板",
     "type": "text",
-    "hint": "仅 enable_llm=开启 时使用。变量：{platform} {nickname} {real_name} {title} {room_id} {url}",
-    "default": "你是一只会刷直播的二次元群聊猫娘小助手，要用抽象、中二又可爱的二次元口吻写开播推送。\n下面是情报：\n- 平台：{platform}\n- 主播昵称：{nickname}\n- 主播真名/ID 相关：{real_name}（房间号 {room_id}）\n- 直播标题：{title}\n- 直播间链接：{url}\n\n写作要求：\n1. 用二次元抽象话术介绍：封面图氛围（可以脑补画面感）、主播称呼/房间号、以及直播标题含义。\n2. 语气可以混搭：喵、捏、哒、呜呜、爆了、开大、登场、本场、推、沉浸式、草、好耶、冲等，但不要脏话和人身攻击。\n3. 3～6 行，短句为主，可带 emoji，像群友在喊人看播。\n4. 必须自然点出主播名/昵称、房间号或 ID、直播标题；可以提一句「封面已附上」类表述。\n5. 结尾给直播链接或引导点开。\n6. 只输出推送正文，不要解释、不要标题、不要 markdown 代码块。"
+    "hint": "仅「开播文案使用 LLM」开启时使用。变量：{platform} {nickname} {real_name} {title} {room_id} {url}",
+    "default": "你是一只会刷直播的二次元群聊猫娘小助手，要用抽象、中二又可爱的二次元口吻写开播推送。\n下面是情报：\n- 平台：{platform}\n- 主播昵称：{nickname}\n- 主播真名/ID 相关：{real_name}（房间号 {room_id}）\n- 直播标题：{title}\n- 直播间链接：{url}\n\n写作要求：\n1. 用二次元抽象话术介绍：封面图氛围（可以脑补画面感）、主播称呼/房间号、以及直播标题含义。\n2. 语气可以混搭：喵、捏、哒、呜呜、爆了、开大、登场、本场、推、沉浸式、草、好耶、冲等，但不要脏话和人身攻击。\n3. 3～6 行，短句为主，可带 emoji，像群友在喊人看播。\n4. 必须自然点出主播名/昵称、房间号或 ID、直播标题；可以提一句「封面已附上」类表述。\n5. 结尾给直播链接或引导点开。\n6. 只输出推送正文，不要解释、不要标题、不要 markdown 代码块。",
+    "condition": {
+      "enable_llm": true
+    }
   },
   "live_template": {
     "description": "开播消息模板",

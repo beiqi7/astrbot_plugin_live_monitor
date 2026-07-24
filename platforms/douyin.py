@@ -2,8 +2,6 @@
 
 from __future__ import annotations
 
-import httpx
-
 from astrbot.api import logger
 
 from .base import LiveInfo, PlatformChecker
@@ -17,22 +15,17 @@ class DouyinChecker(PlatformChecker):
 
     async def fetch(self, room_id: str) -> LiveInfo:
         """room_id 使用直播间 web_rid（链接 https://live.douyin.com/<web_rid> 中的数字）。"""
-        web_rid = str(room_id).strip()
+        web_rid = self.normalize_input_room_id(room_id)
         info = LiveInfo(
             platform=self.platform,
             room_id=web_rid,
             is_live=False,
             url=self.room_url(web_rid),
         )
-        headers = self._headers()
-        headers["Referer"] = "https://live.douyin.com/"
+        headers = self._headers(referer="https://live.douyin.com/")
 
         try:
-            async with httpx.AsyncClient(
-                timeout=self.timeout,
-                headers=headers,
-                follow_redirects=True,
-            ) as client:
+            async with self._client(headers=headers) as client:
                 # 先访问首页获取 ttwid 等 Cookie
                 try:
                     await client.get(
@@ -43,7 +36,6 @@ class DouyinChecker(PlatformChecker):
                     pass
 
                 if self.cookies:
-                    # 合并用户 Cookie
                     client.cookies.update(_parse_cookie_header(self.cookies))
 
                 r = await client.get(
@@ -61,18 +53,22 @@ class DouyinChecker(PlatformChecker):
                         "browser_language": "zh-CN",
                         "browser_platform": "Win32",
                         "browser_name": "Chrome",
-                        "browser_version": "122.0.0.0",
+                        "browser_version": "131.0.0.0",
                         "web_rid": web_rid,
                     },
                 )
                 if r.status_code != 200:
-                    info.error = f"HTTP {r.status_code}"
-                    return info
+                    info.error = self._http_error(r.status_code)
+                    return info.finalize()
 
                 payload = r.json()
                 if payload.get("status_code") not in (0, None):
-                    info.error = payload.get("data") and str(payload.get("data")) or f"status_code={payload.get('status_code')}"
-                    # 仍尝试解析
+                    raw_data = payload.get("data")
+                    info.error = (
+                        str(raw_data)
+                        if raw_data is not None
+                        else f"status_code={payload.get('status_code')}"
+                    )
 
                 data = payload.get("data") or {}
                 rooms = data.get("data") or []
@@ -81,9 +77,8 @@ class DouyinChecker(PlatformChecker):
 
                 if not rooms and not enter_id:
                     info.error = "房间不存在或无法访问（可尝试填写抖音 Cookie）"
-                    # 仍返回结构，便于上层提示
                     info.real_name = str(user.get("nickname") or "")
-                    return info
+                    return info.finalize()
 
                 room = rooms[0] if rooms else {}
                 # status: 2 直播中，4 未开播/已结束
@@ -111,17 +106,20 @@ class DouyinChecker(PlatformChecker):
 
                 info.room_id = web_rid
                 info.url = self.room_url(web_rid)
-                info.raw = {"room": room, "user": user, "room_status": data.get("room_status")}
+                info.raw = {
+                    "room": room,
+                    "user": user,
+                    "room_status": data.get("room_status"),
+                }
 
-                # 成功拿到房间后清除「不存在」类 error
                 if rooms or enter_id:
                     info.error = ""
 
         except Exception as e:
             logger.warning(f"抖音查询失败 room={web_rid}: {e}")
-            info.error = str(e)
+            info.error = f"{type(e).__name__}: {e}"
 
-        return info
+        return info.finalize()
 
 
 def _parse_cookie_header(cookie: str) -> dict[str, str]:

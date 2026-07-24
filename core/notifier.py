@@ -2,13 +2,14 @@
 
 from __future__ import annotations
 
+import asyncio
 import time
 from typing import TYPE_CHECKING, Any
 
 from astrbot.api import logger
 from astrbot.api.message_components import AtAll, Image, Plain
 
-from ..platforms.base import LiveInfo, PLATFORM_NAMES
+from ..platforms.base import LiveInfo, PLATFORM_NAMES, normalize_cover_url
 from .defaults import (
     DEFAULT_LIVE_TEMPLATE,
     DEFAULT_LLM_PROMPT,
@@ -19,6 +20,11 @@ from .storage import RoomRecord
 
 if TYPE_CHECKING:
     from astrbot.api.star import Context
+
+# 推送并发与单会话发送重试
+_SEND_CONCURRENCY = 5
+_SEND_RETRIES = 1
+_SEND_RETRY_DELAY = 0.8
 
 
 def format_duration(seconds: float) -> str:
@@ -47,6 +53,13 @@ def _truthy(val: Any, default: bool = False) -> bool:
     if s in ("0", "false", "no", "off", "关闭", "关", "n", ""):
         return False
     return default
+
+
+def _clip(text: str, max_len: int = 80) -> str:
+    t = (text or "").strip()
+    if len(t) <= max_len:
+        return t
+    return t[: max_len - 1] + "…"
 
 
 class Notifier:
@@ -81,10 +94,15 @@ class Notifier:
         platform = record.platform
         platform_name = PLATFORM_NAMES.get(platform, platform)
         nickname = record.display_name()
-        real_name = (info.real_name if info and info.real_name else record.real_name) or nickname
-        title = (info.title if info and info.title else record.title) or "（无标题）"
+        real_name = (
+            (info.real_name if info and info.real_name else record.real_name) or nickname
+        )
+        raw_title = (info.title if info and info.title else record.title) or "（无标题）"
+        title = _clip(raw_title, 80)
         url = (info.url if info and info.url else record.url) or ""
-        cover = (info.cover_url if info and info.cover_url else record.cover_url) or ""
+        cover = normalize_cover_url(
+            (info.cover_url if info and info.cover_url else record.cover_url) or ""
+        )
         now = time.strftime("%Y-%m-%d %H:%M:%S")
         return {
             "platform": platform_name,
@@ -258,18 +276,19 @@ class Notifier:
         if not _truthy(self._cfg("enable_cover", True), True):
             return ""
         if info and info.cover_url:
-            return info.cover_url
-        return record.cover_url or ""
+            return normalize_cover_url(info.cover_url)
+        return normalize_cover_url(record.cover_url or "")
 
     def _make_image(self, cover_url: str) -> Any | None:
-        if not cover_url:
+        url = normalize_cover_url(cover_url)
+        if not url or not url.startswith("http"):
             return None
         try:
             if hasattr(Image, "fromURL"):
-                return Image.fromURL(cover_url)
+                return Image.fromURL(url)
             if hasattr(Image, "from_url"):
-                return Image.from_url(cover_url)  # type: ignore[attr-defined]
-            return Image(file=cover_url)
+                return Image.from_url(url)  # type: ignore[attr-defined]
+            return Image(file=url)
         except Exception as e:
             logger.warning(f"构建封面图组件失败: {e}")
             return None
@@ -352,6 +371,25 @@ class Notifier:
 
         return chain
 
+    async def _try_send_payloads(
+        self, umo: str, payloads: list[Any]
+    ) -> tuple[bool, list[str]]:
+        errors: list[str] = []
+        for payload in payloads:
+            try:
+                await self.context.send_message(umo, payload)
+                return True, errors
+            except Exception as e:
+                errors.append(str(e))
+        try:
+            await self.context.send_message(
+                unified_msg_origin=umo, message=payloads[0]
+            )
+            return True, errors
+        except Exception as e:
+            errors.append(str(e))
+        return False, errors
+
     async def send(
         self,
         umo: str,
@@ -360,32 +398,76 @@ class Notifier:
         cover_url: str = "",
         at_all: bool = False,
     ) -> bool:
-        """主动发送消息到指定会话（unified_msg_origin）。"""
+        """主动发送消息到指定会话（unified_msg_origin）。
+
+        带封面失败时自动回退纯文本；单次失败会短暂重试一次。
+        """
         if not umo:
             logger.error("主动推送失败: unified_msg_origin 为空")
             return False
 
-        chain = self.build_chain(text, cover_url=cover_url, at_all=at_all)
-        message = self._to_message_chain(chain)
+        cover = normalize_cover_url(cover_url)
+        attempts: list[tuple[str, str]] = []
+        if cover:
+            attempts.append((cover, "cover"))
+        attempts.append(("", "text"))
 
-        errors: list[str] = []
-        for payload in (message, chain):
-            try:
-                await self.context.send_message(umo, payload)
-                logger.info(f"直播通知已主动发送 -> {umo}")
-                return True
-            except Exception as e:
-                errors.append(str(e))
+        all_errors: list[str] = []
+        for attempt_i in range(_SEND_RETRIES + 1):
+            for cov, mode in attempts:
+                chain = self.build_chain(text, cover_url=cov, at_all=at_all)
+                message = self._to_message_chain(chain)
+                ok, errs = await self._try_send_payloads(umo, [message, chain])
+                if ok:
+                    logger.info(f"直播通知已主动发送({mode}) -> {umo}")
+                    return True
+                all_errors.extend(errs)
+                # 封面失败：立刻尝试纯文本，不再等重试间隔
+                if mode == "cover":
+                    logger.debug(f"封面推送失败，回退纯文本 ({umo}): {errs}")
+            if attempt_i < _SEND_RETRIES:
+                await asyncio.sleep(_SEND_RETRY_DELAY)
 
-        try:
-            await self.context.send_message(unified_msg_origin=umo, message=message)
-            logger.info(f"直播通知已主动发送(kw) -> {umo}")
-            return True
-        except Exception as e:
-            errors.append(str(e))
-
-        logger.error(f"直播通知发送失败 ({umo}): {' | '.join(errors)}")
+        logger.error(f"直播通知发送失败 ({umo}): {' | '.join(all_errors)}")
         return False
+
+    async def _fanout(
+        self,
+        record: RoomRecord,
+        text: str,
+        *,
+        cover: str,
+        global_at_all: bool,
+        allow_at_all: bool,
+        label: str,
+    ) -> None:
+        targets: list[tuple[str, bool]] = []
+        for umo in list(record.subscribers):
+            settings = record.session_settings.get(umo) or {}
+            if settings.get("enabled", True) is False:
+                continue
+            at_all = bool(settings.get("at_all", global_at_all)) if allow_at_all else False
+            targets.append((umo, at_all))
+
+        if not targets:
+            logger.info(f"{label}无可用会话 {record.platform}:{record.room_id}")
+            return
+
+        sem = asyncio.Semaphore(_SEND_CONCURRENCY)
+
+        async def _one(umo: str, at_all: bool) -> bool:
+            async with sem:
+                return await self.send(umo, text, cover_url=cover, at_all=at_all)
+
+        results = await asyncio.gather(
+            *[_one(u, a) for u, a in targets],
+            return_exceptions=True,
+        )
+        ok = sum(1 for r in results if r is True)
+        fail = len(results) - ok
+        logger.info(
+            f"{label}完成 {record.platform}:{record.room_id} 成功={ok} 失败={fail}"
+        )
 
     async def notify_live(
         self,
@@ -397,19 +479,13 @@ class Notifier:
         cover = self._cover_url(record, info)
         first_umo = next(iter(record.subscribers), None)
         text = await self.build_live_message(record, info, umo=first_umo)
-
-        ok, fail = 0, 0
-        for umo in list(record.subscribers):
-            settings = record.session_settings.get(umo) or {}
-            if settings.get("enabled", True) is False:
-                continue
-            at_all = bool(settings.get("at_all", global_at_all))
-            if await self.send(umo, text, cover_url=cover, at_all=at_all):
-                ok += 1
-            else:
-                fail += 1
-        logger.info(
-            f"开播通知完成 {record.platform}:{record.room_id} 成功={ok} 失败={fail}"
+        await self._fanout(
+            record,
+            text,
+            cover=cover,
+            global_at_all=global_at_all,
+            allow_at_all=True,
+            label="开播通知",
         )
 
     async def notify_offline(
@@ -422,15 +498,11 @@ class Notifier:
             return
         text = self.build_offline_text(record, info, duration_seconds)
         cover = self._cover_url(record, info)
-        ok, fail = 0, 0
-        for umo in list(record.subscribers):
-            settings = record.session_settings.get(umo) or {}
-            if settings.get("enabled", True) is False:
-                continue
-            if await self.send(umo, text, cover_url=cover, at_all=False):
-                ok += 1
-            else:
-                fail += 1
-        logger.info(
-            f"关播通知完成 {record.platform}:{record.room_id} 成功={ok} 失败={fail}"
+        await self._fanout(
+            record,
+            text,
+            cover=cover,
+            global_at_all=False,
+            allow_at_all=False,
+            label="关播通知",
         )
