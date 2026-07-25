@@ -440,9 +440,13 @@ class Notifier:
         global_at_all: bool,
         allow_at_all: bool,
         label: str,
-    ) -> None:
+        only_umos: list[str] | None = None,
+    ) -> tuple[int, int]:
+        """向订阅会话分发通知。返回 (成功数, 失败数)。"""
         targets: list[tuple[str, bool]] = []
         for umo in list(record.subscribers):
+            if only_umos is not None and umo not in only_umos:
+                continue
             settings = record.session_settings.get(umo) or {}
             if settings.get("enabled", True) is False:
                 continue
@@ -451,7 +455,7 @@ class Notifier:
 
         if not targets:
             logger.info(f"{label}无可用会话 {record.platform}:{record.room_id}")
-            return
+            return 0, 0
 
         sem = asyncio.Semaphore(_SEND_CONCURRENCY)
 
@@ -468,6 +472,7 @@ class Notifier:
         logger.info(
             f"{label}完成 {record.platform}:{record.room_id} 成功={ok} 失败={fail}"
         )
+        return ok, fail
 
     async def notify_live(
         self,
@@ -475,30 +480,37 @@ class Notifier:
         info: LiveInfo | None,
         *,
         global_at_all: bool = False,
-    ) -> None:
+        only_umos: list[str] | None = None,
+    ) -> int:
+        """推送开播通知。返回成功发送的会话数。"""
         cover = self._cover_url(record, info)
-        first_umo = next(iter(record.subscribers), None)
+        if only_umos:
+            first_umo = only_umos[0]
+        else:
+            first_umo = next(iter(record.subscribers), None)
         text = await self.build_live_message(record, info, umo=first_umo)
-        await self._fanout(
+        ok, _fail = await self._fanout(
             record,
             text,
             cover=cover,
             global_at_all=global_at_all,
             allow_at_all=True,
             label="开播通知",
+            only_umos=only_umos,
         )
+        return ok
 
     async def notify_offline(
         self,
         record: RoomRecord,
         info: LiveInfo | None,
         duration_seconds: float,
-    ) -> None:
+    ) -> int:
         if not _truthy(self._cfg("notify_offline", True), True):
-            return
+            return 0
         text = self.build_offline_text(record, info, duration_seconds)
         cover = self._cover_url(record, info)
-        await self._fanout(
+        ok, _fail = await self._fanout(
             record,
             text,
             cover=cover,
@@ -506,3 +518,4 @@ class Notifier:
             allow_at_all=False,
             label="关播通知",
         )
+        return ok

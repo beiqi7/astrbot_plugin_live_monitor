@@ -229,26 +229,7 @@ class LiveMonitorPlugin(Star):
             return
 
         existing = self.data.get(pid, room_id)
-        if existing:
-            if umo in existing.subscribers:
-                yield event.plain_result(
-                    f"⚠️ 当前会话已订阅 {existing.display_name()} "
-                    f"({PLATFORM_NAMES[pid]} {room_id})"
-                )
-                return
-            self.data.subscribe(pid, room_id, umo)
-            if nickname:
-                self.data.set_nickname(pid, room_id, nickname)
-            rec = self.data.get(pid, room_id)
-            yield event.plain_result(
-                f"✅ 已订阅（将主动推送到本会话）\n"
-                f"主播: {rec.display_name()}\n"
-                f"平台: {PLATFORM_NAMES[pid]}\n"
-                f"房间: {room_id}\n"
-                f"状态: {'🔴直播中' if rec.is_live else '⚫未开播'}\n"
-                f"会话: {umo}"
-            )
-            return
+        already_sub = bool(existing and umo in existing.subscribers)
 
         yield event.plain_result(f"⏳ 正在查询 {PLATFORM_NAMES[pid]} 房间 {room_id} …")
 
@@ -260,10 +241,73 @@ class LiveMonitorPlugin(Star):
             bilibili_cookie=str(cfg.get("bilibili_cookie", "") or ""),
             douyin_cookie=str(cfg.get("douyin_cookie", "") or ""),
         )
-        if not info.ok and not info.real_name:
+        if not info.ok and not info.real_name and not info.title:
             yield event.plain_result(
                 f"❌ 无法获取直播间信息\n原因: {info.error or '未知'}\n"
                 f"请检查房间号；抖音可尝试在配置中填写 Cookie"
+            )
+            return
+
+        # 已在监控列表：补订阅 + 刷新状态；已在播则推给当前会话
+        if existing:
+            if not already_sub:
+                self.data.subscribe(pid, room_id, umo)
+            if nickname:
+                self.data.set_nickname(pid, room_id, nickname)
+            if info.ok or info.real_name or info.title:
+                self.data.update_live_state(
+                    pid,
+                    existing.room_id,
+                    is_live=bool(info.is_live),
+                    title=info.title or existing.title,
+                    real_name=info.real_name or existing.real_name,
+                    cover_url=info.cover_url or existing.cover_url,
+                    url=info.url or existing.url,
+                    live_start_ts=(
+                        (existing.live_start_ts or time.time())
+                        if info.is_live
+                        else 0.0
+                    ),
+                )
+            rec = self.data.get(pid, existing.room_id) or existing
+            self.monitor._primed.add(room_key(rec.platform, rec.room_id))
+
+            pushed = False
+            push_fail = False
+            if bool(info.is_live):
+                try:
+                    self.notifier.reload_config(cfg)
+                    n = await self.notifier.notify_live(
+                        rec,
+                        info,
+                        global_at_all=bool(cfg.get("at_all_on_live", False)),
+                        only_umos=[umo],
+                    )
+                    pushed = n > 0
+                    push_fail = not pushed
+                except Exception as e:
+                    logger.warning(f"订阅时推送开播通知失败: {e}")
+                    push_fail = True
+
+            status = "🔴 直播中" if info.is_live else "⚫ 未开播"
+            head = (
+                "⚠️ 当前会话已订阅，已刷新状态"
+                if already_sub
+                else "✅ 已订阅（将主动推送到本会话）"
+            )
+            push_note = ""
+            if pushed:
+                push_note = "\n📨 已推送开播通知到本会话"
+            elif push_fail and info.is_live:
+                push_note = "\n⚠️ 开播通知推送失败，请 /livecheck testpush 检查通道"
+            yield event.plain_result(
+                f"{head}\n"
+                f"主播: {rec.display_name()}\n"
+                f"平台: {PLATFORM_NAMES[pid]}\n"
+                f"房间: {rec.room_id}\n"
+                f"状态: {status}\n"
+                f"会话: {umo}"
+                f"{push_note}"
             )
             return
 
@@ -288,20 +332,31 @@ class LiveMonitorPlugin(Star):
 
         # 已在直播：立即推送一次开播通知，再 prime 避免轮询重复推送
         pushed = False
+        push_fail = False
         if rec.is_live:
             try:
                 self.notifier.reload_config(cfg)
-                await self.notifier.notify_live(
-                    rec, info, global_at_all=bool(cfg.get("at_all_on_live", False))
+                n = await self.notifier.notify_live(
+                    rec,
+                    info,
+                    global_at_all=bool(cfg.get("at_all_on_live", False)),
+                    only_umos=[umo],
                 )
-                pushed = True
+                pushed = n > 0
+                push_fail = not pushed
             except Exception as e:
                 logger.warning(f"添加时推送开播通知失败: {e}")
+                push_fail = True
         self.monitor._primed.add(room_key(rec.platform, rec.room_id))
 
         status = "🔴 直播中" if rec.is_live else "⚫ 未开播"
         tip = f"\n⚠️ 提示: {info.error}" if info.error else ""
-        push_note = "\n📨 已推送开播通知到本会话" if pushed else ""
+        if pushed:
+            push_note = "\n📨 已推送开播通知到本会话"
+        elif push_fail and rec.is_live:
+            push_note = "\n⚠️ 开播通知推送失败，请 /livecheck testpush 检查通道"
+        else:
+            push_note = ""
 
         yield event.plain_result(
             f"✅ 已添加监控并订阅\n"
