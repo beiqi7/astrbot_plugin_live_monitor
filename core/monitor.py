@@ -105,11 +105,29 @@ class LiveMonitor:
             from .config_sync import sync_rooms_from_config
 
             cfg = self._cfg()
-            await sync_rooms_from_config(
+            stats = await sync_rooms_from_config(
                 self.data,
                 cfg,
                 mark_primed=lambda k: self._primed.add(k),
             )
+            # 轮询中新同步到的已开播房间，立刻推送
+            live_to_notify = stats.get("live_to_notify") or []
+            if live_to_notify:
+                global_at_all = bool(cfg.get("at_all_on_live", False))
+                self.notifier.reload_config(cfg)
+                for rec, info in live_to_notify:
+                    try:
+                        n = await self.notifier.notify_live(
+                            rec, info, global_at_all=global_at_all
+                        )
+                        logger.info(
+                            f"轮询同步新加已开播房间已推送: "
+                            f"{rec.platform}:{rec.room_id} 成功={n}"
+                        )
+                    except Exception as e:
+                        logger.warning(
+                            f"轮询同步推送失败 {rec.platform}:{rec.room_id}: {e}"
+                        )
         except Exception as e:
             logger.debug(f"轮询前配置同步跳过: {e}")
 

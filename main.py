@@ -13,7 +13,11 @@ from astrbot.api import AstrBotConfig, logger
 from astrbot.api.event import AstrMessageEvent, filter
 from astrbot.api.star import Context, Star, register
 
-from .core.config_sync import sync_rooms_from_config
+from .core.config_sync import (
+    DEFAULT_UMO_PREFIX,
+    extract_umo_prefix,
+    sync_rooms_from_config,
+)
 from .core.monitor import LiveMonitor
 from .core.notifier import Notifier
 from .core.storage import DataManager, RoomRecord, room_key
@@ -108,6 +112,28 @@ class LiveMonitorPlugin(Star):
             except Exception:
                 return {}
 
+    def _learn_umo_prefix(self, umo: str | None) -> None:
+        """从真实会话 ID 自动学习群号前缀，保证「只填群号」能推对。"""
+        prefix = extract_umo_prefix(umo or "")
+        if not prefix:
+            return
+        cfg = self._cfg_dict()
+        current = str(cfg.get("umo_prefix", "") or "").strip()
+        if current and not current.endswith(":"):
+            current = current + ":"
+        if current == prefix:
+            return
+        try:
+            if self.config is not None and hasattr(self.config, "get"):
+                self.config["umo_prefix"] = prefix
+                if hasattr(self.config, "save_config"):
+                    self.config.save_config()
+            elif isinstance(self.config, dict):
+                self.config["umo_prefix"] = prefix
+            logger.info(f"livecheck 已自动学习会话前缀: {prefix}")
+        except Exception as e:
+            logger.debug(f"学习会话前缀失败: {e}")
+
     async def initialize(self):
         self.notifier.reload_config(self._cfg_dict())
         stats = await self._sync_config_rooms()
@@ -116,7 +142,8 @@ class LiveMonitorPlugin(Star):
             f"livecheck 已加载，房间={len(self.data.all_rooms())} "
             f"(配置同步 +{stats.get('added', 0)} ~{stats.get('updated', 0)} "
             f"-{stats.get('removed', 0)}) "
-            f"LLM={'开' if self.notifier.llm_enabled() else '关(模板)'}"
+            f"LLM={'开' if self.notifier.llm_enabled() else '关(模板)'} "
+            f"前缀={self._cfg_dict().get('umo_prefix') or DEFAULT_UMO_PREFIX}"
         )
 
     async def terminate(self):
@@ -125,11 +152,14 @@ class LiveMonitorPlugin(Star):
         logger.info("livecheck 直播监控已卸载")
 
     async def _sync_config_rooms(self) -> dict:
-        """从 WebUI 配置同步监控列表与推送目标。"""
+        """从 WebUI 配置同步监控列表与推送目标。
+
+        新加入且已在直播的房间会立刻推送开播通知。
+        """
         cfg = self._cfg_dict()
         self.notifier.reload_config(cfg)
         try:
-            return await sync_rooms_from_config(
+            stats = await sync_rooms_from_config(
                 self.data,
                 cfg,
                 mark_primed=lambda k: self.monitor._primed.add(k),
@@ -137,6 +167,25 @@ class LiveMonitorPlugin(Star):
         except Exception as e:
             logger.error(f"从配置同步直播间失败: {e}")
             return {"added": 0, "updated": 0, "removed": 0, "total_config": 0}
+
+        # 配置新加且已在播 → 立即推送（否则 prime 后轮询不会再推）
+        live_to_notify = stats.pop("live_to_notify", None) or []
+        if live_to_notify:
+            global_at_all = bool(cfg.get("at_all_on_live", False))
+            for rec, info in live_to_notify:
+                try:
+                    n = await self.notifier.notify_live(
+                        rec, info, global_at_all=global_at_all
+                    )
+                    logger.info(
+                        f"配置新加已开播房间已推送: {rec.platform}:{rec.room_id} "
+                        f"成功会话={n}"
+                    )
+                except Exception as e:
+                    logger.warning(
+                        f"配置新加房间推送失败 {rec.platform}:{rec.room_id}: {e}"
+                    )
+        return stats
 
     # -------------------- helpers --------------------
 
@@ -227,6 +276,7 @@ class LiveMonitorPlugin(Star):
                 "❌ 无法获取当前会话 ID（unified_msg_origin 为空），无法订阅推送"
             )
             return
+        self._learn_umo_prefix(umo)
 
         existing = self.data.get(pid, room_id)
         already_sub = bool(existing and umo in existing.subscribers)
@@ -496,6 +546,7 @@ class LiveMonitorPlugin(Star):
 
         无参数时列出所有正在直播的房间；带参数则查指定房间。
         """
+        self._learn_umo_prefix(event.unified_msg_origin)
         # 无参数：列出所有正在直播的房间
         if not platform and not room_id:
             rooms = self.data.all_rooms()
@@ -655,6 +706,7 @@ class LiveMonitorPlugin(Star):
                 "❌ 无法获取 unified_msg_origin，当前平台可能不支持主动消息"
             )
             return
+        self._learn_umo_prefix(umo)
 
         self.notifier.reload_config(self._cfg_dict())
         text = (
@@ -689,6 +741,7 @@ class LiveMonitorPlugin(Star):
     @livecheck_group.command("status")
     async def cmd_status(self, event: AstrMessageEvent):
         """查看监控运行状态"""
+        self._learn_umo_prefix(event.unified_msg_origin)
         rooms = self.data.all_rooms()
         live_n = sum(1 for r in rooms.values() if r.is_live)
         subs = sum(len(r.subscribers) for r in rooms.values())
@@ -701,9 +754,10 @@ class LiveMonitorPlugin(Star):
         from .core.config_sync import parse_notify_targets, parse_rooms_from_config
 
         cfg_rooms = parse_rooms_from_config(cfg)
+        prefix = str(cfg.get("umo_prefix", "") or DEFAULT_UMO_PREFIX)
         cfg_notify = parse_notify_targets(
             str(cfg.get("notify_targets", "") or ""),
-            str(cfg.get("umo_prefix", "") or "aiocqhttp:GroupMessage:"),
+            prefix,
         )
         yield event.plain_result(
             f"📊 livecheck 结界状态\n"
@@ -718,23 +772,31 @@ class LiveMonitorPlugin(Star):
             f"🤖 LLM文案: {'开 · ' + provider_id if llm_on else '关（二次元模板，可选开）'}\n"
             f"📴 关播通知: {'开' if cfg.get('notify_offline', True) else '关'}\n"
             f"🔁 轮询: {'运行中喵' if self.monitor._running else '已停止'}\n"
+            f"🏷️ 群号前缀: {prefix}\n"
             f"📬 当前会话: {umo}\n"
-            f"提示: 设置改完可 /livecheck sync 立即生效"
+            f"提示: 推送目标只填群号即可；设置改完可 /livecheck sync"
         )
 
     @livecheck_group.command("sync")
     async def cmd_sync(self, event: AstrMessageEvent):
         """立即从插件设置同步直播间与推送目标"""
+        self._learn_umo_prefix(event.unified_msg_origin)
         yield event.plain_result("⏳ 正在从插件设置同步直播间喵…")
         stats = await self._sync_config_rooms()
         n_cfg = stats.get("total_config", 0)
         n_notify = stats.get("notify_count", 0)
+        targets = stats.get("notify_targets") or []
         tip = ""
         if n_cfg and not n_notify:
             tip = (
                 "\n⚠️ 设置里有直播间，但「推送目标」是空的，"
                 "开播没地方推哦。请去插件设置填 QQ 群号。"
             )
+        tgt_line = ""
+        if targets:
+            show = targets[:3]
+            more = f" …共{len(targets)}个" if len(targets) > 3 else ""
+            tgt_line = f"\n🎯 目标: {', '.join(show)}{more}"
         yield event.plain_result(
             f"✅ 同步完成\n"
             f"━━━━━━━━━━━━━━━━\n"
@@ -742,7 +804,7 @@ class LiveMonitorPlugin(Star):
             f"➕ 新加入: {stats.get('added', 0)}\n"
             f"🔄 已更新: {stats.get('updated', 0)}\n"
             f"➖ 已移除: {stats.get('removed', 0)}\n"
-            f"📬 推送目标数: {n_notify}\n"
+            f"📬 推送目标数: {n_notify}{tgt_line}\n"
             f"📺 当前总监控: {len(self.data.all_rooms())}"
             f"{tip}"
         )

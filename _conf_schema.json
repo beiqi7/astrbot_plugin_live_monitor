@@ -46,18 +46,18 @@
     "obvious_hint": true
   },
   "notify_targets": {
-    "description": "推送目标（QQ 群/会话）",
+    "description": "推送目标（QQ 群号）",
     "type": "text",
-    "hint": "设置里添加的直播间，开播/关播会推到这里。每行一个：\n1) 直接填 QQ 群号，如 123456789\n2) 或完整会话 ID（群里发 /livecheck testpush 可查看）\n以 # 开头的行忽略。",
+    "hint": "每行一个 QQ 群号即可，如：\n123456789\n987654321\n在对应群里随便发一条 /livecheck 指令后，前缀会自动匹配。",
     "default": "",
     "obvious_hint": true
   },
   "umo_prefix": {
-    "description": "群号转会话前缀",
+    "description": "群号转会话前缀（一般不用改）",
     "type": "string",
-    "hint": "推送目标只写群号时，自动拼成：前缀+群号。OneBot/NapCat 默认 aiocqhttp:GroupMessage:",
-    "default": "aiocqhttp:GroupMessage:",
-    "obvious_hint": true
+    "hint": "只填群号时自动拼成：前缀+群号。默认 default:GroupMessage:。在群里用过 /livecheck 后会自动学习，通常无需手动改。",
+    "default": "default:GroupMessage:",
+    "obvious_hint": false
   },
   "check_interval": {
     "description": "轮询间隔（秒）",

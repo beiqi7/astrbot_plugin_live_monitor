@@ -11,9 +11,39 @@ from ..platforms import check_room, extract_room_id, normalize_platform
 from .storage import DataManager, RoomRecord, room_key
 
 
-def parse_notify_targets(text: str, umo_prefix: str = "aiocqhttp:GroupMessage:") -> list[str]:
-    """解析推送目标：完整 UMO 或纯群号。"""
-    prefix = (umo_prefix or "aiocqhttp:GroupMessage:").strip()
+DEFAULT_UMO_PREFIX = "default:GroupMessage:"
+
+
+def extract_umo_prefix(umo: str) -> str:
+    """从完整会话 ID 提取前缀，如 default:GroupMessage:xxx → default:GroupMessage:"""
+    s = (umo or "").strip()
+    if s.count(":") < 2:
+        return ""
+    parts = s.split(":")
+    return f"{parts[0]}:{parts[1]}:"
+
+
+def extract_group_id_from_umo(umo: str) -> str:
+    """从会话 ID 尽量提取群号（兼容 unique_session 的 群号_用户号）。"""
+    s = (umo or "").strip()
+    if s.count(":") < 2:
+        return s.replace("群", "").strip()
+    session = s.split(":", 2)[2]
+    # unique_session: groupid_userid
+    if "_" in session:
+        left, right = session.split("_", 1)
+        if left.isdigit():
+            return left
+        if right.isdigit():
+            return right
+    return session
+
+
+def parse_notify_targets(
+    text: str, umo_prefix: str = DEFAULT_UMO_PREFIX
+) -> list[str]:
+    """解析推送目标：优先纯群号，也兼容完整会话 ID。"""
+    prefix = (umo_prefix or DEFAULT_UMO_PREFIX).strip()
     if prefix and not prefix.endswith(":"):
         prefix = prefix + ":"
 
@@ -27,7 +57,7 @@ def parse_notify_targets(text: str, umo_prefix: str = "aiocqhttp:GroupMessage:")
         if line.count(":") >= 2:
             umo = line
         else:
-            # 纯数字群号 / 会话 id
+            # 纯群号（推荐）
             gid = line.replace("群", "").strip()
             umo = f"{prefix}{gid}"
         if umo not in seen:
@@ -105,20 +135,23 @@ async def sync_rooms_from_config(
     cfg: dict[str, Any],
     *,
     mark_primed: Callable[[str], None] | None = None,
-) -> dict[str, int]:
+) -> dict[str, Any]:
     """将配置中的直播间同步进 DataManager。
 
     - 配置里有的房间：写入/更新，并挂上 notify_targets 订阅
     - 仅来自配置、且已从配置删除的房间：移除
     - 纯指令添加的房间（from_config=False）：不受配置删除影响
+    - 新加入且已在直播的房间：记入 live_to_notify，由调用方推送
 
     Returns:
-        {"added": n, "updated": n, "removed": n, "total_config": n}
+        dict with added/updated/removed/total_config/notify_count/live_to_notify
     """
+    from ..platforms.base import LiveInfo
+
     room_defs = parse_rooms_from_config(cfg)
     notify = parse_notify_targets(
         str(cfg.get("notify_targets", "") or ""),
-        str(cfg.get("umo_prefix", "aiocqhttp:GroupMessage:") or "aiocqhttp:GroupMessage:"),
+        str(cfg.get("umo_prefix", "") or DEFAULT_UMO_PREFIX),
     )
     timeout = float(cfg.get("request_timeout", 12) or 12)
     bili_cookie = str(cfg.get("bilibili_cookie", "") or "")
@@ -126,12 +159,15 @@ async def sync_rooms_from_config(
 
     config_keys: set[str] = set()
     added = updated = 0
+    live_to_notify: list[tuple[RoomRecord, LiveInfo]] = []
 
     if room_defs and not notify:
         logger.warning(
             "livecheck: 设置里已添加直播间，但「推送目标」为空，"
-            "开播将无人接收。请填写 QQ 群号或会话 ID。"
+            "开播将无人接收。请填写完整会话 ID（群里 /livecheck testpush 可查看）。"
         )
+    elif notify:
+        logger.info(f"livecheck 推送目标: {notify}")
 
     for item in room_defs:
         pid = item["platform"]
@@ -143,6 +179,7 @@ async def sync_rooms_from_config(
         existing = data.get(pid, rid)
         if existing:
             changed = False
+            newly_subbed: list[str] = []
             existing.from_config = True
             if nick and existing.nickname != nick:
                 existing.nickname = nick
@@ -153,10 +190,46 @@ async def sync_rooms_from_config(
                     existing.session_settings.setdefault(
                         umo, {"at_all": False, "enabled": True}
                     )
+                    newly_subbed.append(umo)
                     changed = True
             if changed:
                 data.save()
                 updated += 1
+            # 新挂上的推送目标 + 房间已在播 → 给新目标推一次
+            if newly_subbed and existing.is_live:
+                from ..platforms.base import LiveInfo as LI
+
+                info_stub = LI(
+                    platform=existing.platform,
+                    room_id=existing.room_id,
+                    is_live=True,
+                    title=existing.title,
+                    real_name=existing.real_name,
+                    cover_url=existing.cover_url,
+                    url=existing.url,
+                )
+                # 临时只推新目标：构造浅拷贝订阅列表
+                rec_copy = RoomRecord(
+                    platform=existing.platform,
+                    room_id=existing.room_id,
+                    nickname=existing.nickname,
+                    real_name=existing.real_name,
+                    title=existing.title,
+                    cover_url=existing.cover_url,
+                    url=existing.url,
+                    is_live=True,
+                    live_start_ts=existing.live_start_ts,
+                    last_check_ts=existing.last_check_ts,
+                    subscribers=list(newly_subbed),
+                    session_settings={
+                        u: existing.session_settings.get(
+                            u, {"at_all": False, "enabled": True}
+                        )
+                        for u in newly_subbed
+                    },
+                    from_config=True,
+                )
+                live_to_notify.append((rec_copy, info_stub))
             continue
 
         # 新房间：拉一次信息
@@ -196,9 +269,12 @@ async def sync_rooms_from_config(
         if mark_primed:
             mark_primed(room_key(rec.platform, rec.room_id))
         added += 1
+        # 新加入且已在播：交给调用方立刻推送（否则 prime 后轮询不会推）
+        if rec.is_live and rec.subscribers:
+            live_to_notify.append((rec, info))
         logger.info(
             f"从配置添加直播间: {rec.display_name()} ({pid}:{rec.room_id}) "
-            f"推送会话={len(notify)}"
+            f"推送会话={len(notify)} 直播中={rec.is_live}"
         )
 
     # 删除：曾经是配置房间，但配置里已去掉
@@ -220,4 +296,6 @@ async def sync_rooms_from_config(
         "removed": removed,
         "total_config": len(config_keys),
         "notify_count": len(notify),
+        "live_to_notify": live_to_notify,
+        "notify_targets": notify,
     }
