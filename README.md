@@ -47,7 +47,7 @@ AstrBot 多平台直播监控插件 · 指令前缀 **`/livecheck`**
 | `/livecheck remove <平台> <房间号>` | 管理员强制删除 |
 | `/livecheck list` / `list all` | 列表 |
 | `/livecheck nickname <平台> <房间号> <昵称>` | 改昵称 |
-| `/livecheck check <平台> <房间号>` | 立刻查询 |
+| `/livecheck check` / `check <平台> <房间号>` | 列出正在直播 / 立刻查询 |
 | `/livecheck atall / mute ...` | @全体 / 静音 |
 | `/livecheck sync` | 立即从插件设置同步直播间 |
 | `/livecheck testpush` | 测试主动推送 |

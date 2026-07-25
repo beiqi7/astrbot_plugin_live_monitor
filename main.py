@@ -38,7 +38,7 @@ HELP_TEXT = """✨ livecheck · 多平台直播结界
 /livecheck del <平台> <房间号>
 /livecheck list · list all
 /livecheck nickname <平台> <房间号> <昵称>
-/livecheck check <平台> <房间号>
+/livecheck check [平台 房间号]  · 不带参数列出正在直播
 
 【会话设置】
 /livecheck atall <平台> <房间号> [on|off]
@@ -285,10 +285,23 @@ class LiveMonitorPlugin(Star):
         )
         # display_name 在 nickname 为空时用 real_name
         self.data.add_room(rec)
+
+        # 已在直播：立即推送一次开播通知，再 prime 避免轮询重复推送
+        pushed = False
+        if rec.is_live:
+            try:
+                self.notifier.reload_config(cfg)
+                await self.notifier.notify_live(
+                    rec, info, global_at_all=bool(cfg.get("at_all_on_live", False))
+                )
+                pushed = True
+            except Exception as e:
+                logger.warning(f"添加时推送开播通知失败: {e}")
         self.monitor._primed.add(room_key(rec.platform, rec.room_id))
 
         status = "🔴 直播中" if rec.is_live else "⚫ 未开播"
         tip = f"\n⚠️ 提示: {info.error}" if info.error else ""
+        push_note = "\n📨 已推送开播通知到本会话" if pushed else ""
 
         yield event.plain_result(
             f"✅ 已添加监控并订阅\n"
@@ -300,7 +313,7 @@ class LiveMonitorPlugin(Star):
             f"📡 状态: {status}\n"
             f"🔗 {rec.url}\n"
             f"📬 推送会话: {umo}"
-            f"{tip}\n\n"
+            f"{tip}{push_note}\n\n"
             f"改昵称: /livecheck nickname {pid} {rec.room_id} <名>\n"
             f"测推送: /livecheck testpush"
         )
@@ -418,13 +431,54 @@ class LiveMonitorPlugin(Star):
         )
 
     @livecheck_group.command("check")
-    async def cmd_check(self, event: AstrMessageEvent, platform: str, room_id: str):
-        """立即查询直播间状态"""
+    async def cmd_check(
+        self,
+        event: AstrMessageEvent,
+        platform: str = "",
+        room_id: str = "",
+    ):
+        """立即查询直播间状态
+
+        无参数时列出所有正在直播的房间；带参数则查指定房间。
+        """
+        # 无参数：列出所有正在直播的房间
+        if not platform and not room_id:
+            rooms = self.data.all_rooms()
+            live_rooms = [r for r in rooms.values() if r.is_live]
+            if not live_rooms:
+                yield event.plain_result(
+                    "⚫ 当前没有正在直播的房间喵\n"
+                    "共监控 {} 个房间".format(len(rooms))
+                )
+                return
+            lines = [
+                f"🔴 正在直播 ({len(live_rooms)}/{len(rooms)})",
+                "━━━━━━━━━━━━━━━━",
+            ]
+            for i, rec in enumerate(live_rooms, 1):
+                title = rec.title or "（无标题）"
+                if len(title) > 30:
+                    title = title[:30] + "…"
+                lines.append(
+                    f"{i}. {rec.display_name()} [{PLATFORM_NAMES.get(rec.platform, rec.platform)}]\n"
+                    f"   🎬 {title}\n"
+                    f"   🔗 {rec.url}"
+                )
+            lines.append("━━━━━━━━━━━━━━━━")
+            lines.append("查详情: /livecheck check <平台> <房间号>")
+            yield event.plain_result("\n".join(lines))
+            return
+
+        # 带参数：查指定房间
         pid = self._parse_platform(platform)
         if not pid:
-            yield event.plain_result(f"⚠️ 未知平台「{platform}」")
+            plats = "、".join(f"{k}/{v}" for k, v in list_platforms())
+            yield event.plain_result(f"⚠️ 未知平台「{platform}」\n支持: {plats}")
             return
         room_id = extract_room_id(str(room_id).strip(), pid)
+        if not room_id:
+            yield event.plain_result("⚠️ 请填写房间号或直播间链接")
+            return
         cfg = self._cfg_dict()
         info = await check_room(
             pid,
