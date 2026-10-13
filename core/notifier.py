@@ -500,6 +500,29 @@ class Notifier:
         )
         return ok
 
+    async def notify_pending_live(
+        self,
+        pending: list[tuple[RoomRecord, LiveInfo]],
+        *,
+        global_at_all: bool = False,
+        source: str = "配置同步",
+    ) -> int:
+        """批量推送「新加入且已在播」的房间，返回成功会话总数。"""
+        total = 0
+        for rec, info in pending:
+            try:
+                n = await self.notify_live(rec, info, global_at_all=global_at_all)
+                total += n
+                logger.info(
+                    f"{source}新加已开播房间已推送: "
+                    f"{rec.platform}:{rec.room_id} 成功会话={n}"
+                )
+            except Exception as e:
+                logger.warning(
+                    f"{source}推送失败 {rec.platform}:{rec.room_id}: {e}"
+                )
+        return total
+
     async def notify_offline(
         self,
         record: RoomRecord,

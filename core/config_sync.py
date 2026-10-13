@@ -7,7 +7,8 @@ from typing import Any, Callable
 
 from astrbot.api import logger
 
-from ..platforms import check_room, extract_room_id, normalize_platform
+from ..platforms import check_room, extract_room_id, fetch_options, normalize_platform
+from ..platforms.base import LiveInfo
 from .storage import DataManager, RoomRecord, room_key
 
 
@@ -146,16 +147,12 @@ async def sync_rooms_from_config(
     Returns:
         dict with added/updated/removed/total_config/notify_count/live_to_notify
     """
-    from ..platforms.base import LiveInfo
-
     room_defs = parse_rooms_from_config(cfg)
     notify = parse_notify_targets(
         str(cfg.get("notify_targets", "") or ""),
         str(cfg.get("umo_prefix", "") or DEFAULT_UMO_PREFIX),
     )
-    timeout = float(cfg.get("request_timeout", 12) or 12)
-    bili_cookie = str(cfg.get("bilibili_cookie", "") or "")
-    dy_cookie = str(cfg.get("douyin_cookie", "") or "")
+    opts = fetch_options(cfg)
 
     config_keys: set[str] = set()
     added = updated = 0
@@ -195,51 +192,18 @@ async def sync_rooms_from_config(
             if changed:
                 data.save()
                 updated += 1
-            # 新挂上的推送目标 + 房间已在播 → 给新目标推一次
+            # 新挂上的推送目标 + 房间已在播 → 只给新目标推一次
             if newly_subbed and existing.is_live:
-                from ..platforms.base import LiveInfo as LI
-
-                info_stub = LI(
-                    platform=existing.platform,
-                    room_id=existing.room_id,
-                    is_live=True,
-                    title=existing.title,
-                    real_name=existing.real_name,
-                    cover_url=existing.cover_url,
-                    url=existing.url,
+                live_to_notify.append(
+                    (
+                        existing.with_subscribers(newly_subbed),
+                        LiveInfo.from_cache(existing),
+                    )
                 )
-                # 临时只推新目标：构造浅拷贝订阅列表
-                rec_copy = RoomRecord(
-                    platform=existing.platform,
-                    room_id=existing.room_id,
-                    nickname=existing.nickname,
-                    real_name=existing.real_name,
-                    title=existing.title,
-                    cover_url=existing.cover_url,
-                    url=existing.url,
-                    is_live=True,
-                    live_start_ts=existing.live_start_ts,
-                    last_check_ts=existing.last_check_ts,
-                    subscribers=list(newly_subbed),
-                    session_settings={
-                        u: existing.session_settings.get(
-                            u, {"at_all": False, "enabled": True}
-                        )
-                        for u in newly_subbed
-                    },
-                    from_config=True,
-                )
-                live_to_notify.append((rec_copy, info_stub))
             continue
 
         # 新房间：拉一次信息
-        info = await check_room(
-            pid,
-            rid,
-            timeout=timeout,
-            bilibili_cookie=bili_cookie,
-            douyin_cookie=dy_cookie,
-        )
+        info = await check_room(pid, rid, **opts)
         if not info.ok and not info.real_name and not info.title:
             logger.warning(
                 f"配置直播间查询失败，仍会加入监控 {pid}:{rid} — {info.error}"

@@ -25,6 +25,7 @@ from .platforms import (
     PLATFORM_NAMES,
     check_room,
     extract_room_id,
+    fetch_options,
     list_platforms,
     normalize_platform,
 )
@@ -169,22 +170,13 @@ class LiveMonitorPlugin(Star):
             return {"added": 0, "updated": 0, "removed": 0, "total_config": 0}
 
         # 配置新加且已在播 → 立即推送（否则 prime 后轮询不会再推）
-        live_to_notify = stats.pop("live_to_notify", None) or []
-        if live_to_notify:
-            global_at_all = bool(cfg.get("at_all_on_live", False))
-            for rec, info in live_to_notify:
-                try:
-                    n = await self.notifier.notify_live(
-                        rec, info, global_at_all=global_at_all
-                    )
-                    logger.info(
-                        f"配置新加已开播房间已推送: {rec.platform}:{rec.room_id} "
-                        f"成功会话={n}"
-                    )
-                except Exception as e:
-                    logger.warning(
-                        f"配置新加房间推送失败 {rec.platform}:{rec.room_id}: {e}"
-                    )
+        pending = stats.pop("live_to_notify", None) or []
+        if pending:
+            await self.notifier.notify_pending_live(
+                pending,
+                global_at_all=bool(cfg.get("at_all_on_live", False)),
+                source="配置",
+            )
         return stats
 
     # -------------------- helpers --------------------
@@ -284,13 +276,7 @@ class LiveMonitorPlugin(Star):
         yield event.plain_result(f"⏳ 正在查询 {PLATFORM_NAMES[pid]} 房间 {room_id} …")
 
         cfg = self._cfg_dict()
-        info = await check_room(
-            pid,
-            room_id,
-            timeout=float(cfg.get("request_timeout", 12) or 12),
-            bilibili_cookie=str(cfg.get("bilibili_cookie", "") or ""),
-            douyin_cookie=str(cfg.get("douyin_cookie", "") or ""),
-        )
+        info = await check_room(pid, room_id, **fetch_options(cfg))
         if not info.ok and not info.real_name and not info.title:
             yield event.plain_result(
                 f"❌ 无法获取直播间信息\n原因: {info.error or '未知'}\n"
@@ -586,13 +572,7 @@ class LiveMonitorPlugin(Star):
             yield event.plain_result("⚠️ 请填写房间号或直播间链接")
             return
         cfg = self._cfg_dict()
-        info = await check_room(
-            pid,
-            room_id,
-            timeout=float(cfg.get("request_timeout", 12) or 12),
-            bilibili_cookie=str(cfg.get("bilibili_cookie", "") or ""),
-            douyin_cookie=str(cfg.get("douyin_cookie", "") or ""),
-        )
+        info = await check_room(pid, room_id, **fetch_options(cfg))
         rec = self.data.get(pid, room_id)
         name = rec.display_name() if rec else (info.real_name or room_id)
 

@@ -29,6 +29,19 @@ def list_platforms() -> list[tuple[str, str]]:
     return [(k, PLATFORM_NAMES[k]) for k in _CHECKER_CLS]
 
 
+def fetch_options(cfg: dict[str, Any]) -> dict[str, Any]:
+    """从插件配置提取 check_room 需要的请求参数。"""
+    try:
+        timeout = float(cfg.get("request_timeout", 12) or 12)
+    except (TypeError, ValueError):
+        timeout = 12.0
+    return {
+        "timeout": timeout,
+        "bilibili_cookie": str(cfg.get("bilibili_cookie", "") or ""),
+        "douyin_cookie": str(cfg.get("douyin_cookie", "") or ""),
+    }
+
+
 def get_checker(
     platform: str,
     timeout: float = 12.0,

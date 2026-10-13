@@ -142,6 +142,19 @@ class LiveInfo:
     def ok(self) -> bool:
         return not self.error
 
+    @classmethod
+    def from_cache(cls, rec: Any) -> "LiveInfo":
+        """用已缓存的房间记录构造 LiveInfo（无需再请求平台）。"""
+        return cls(
+            platform=rec.platform,
+            room_id=rec.room_id,
+            is_live=bool(rec.is_live),
+            title=rec.title,
+            real_name=rec.real_name,
+            cover_url=rec.cover_url,
+            url=rec.url,
+        )
+
     def finalize(self) -> "LiveInfo":
         """规范化字段后返回自身，便于 fetch 末尾统一调用。"""
         self.cover_url = normalize_cover_url(self.cover_url)

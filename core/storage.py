@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import json
 import time
-from dataclasses import asdict, dataclass, field
+from dataclasses import asdict, dataclass, field, replace
 from pathlib import Path
 from typing import Any
 
@@ -36,6 +36,17 @@ class RoomRecord:
 
     def display_name(self) -> str:
         return self.nickname or self.real_name or f"{self.platform}:{self.room_id}"
+
+    def with_subscribers(self, umos: list[str]) -> "RoomRecord":
+        """返回仅含指定订阅者的浅拷贝，用于定向推送。"""
+        return replace(
+            self,
+            subscribers=list(umos),
+            session_settings={
+                u: self.session_settings.get(u, {"at_all": False, "enabled": True})
+                for u in umos
+            },
+        )
 
     def to_dict(self) -> dict[str, Any]:
         return asdict(self)

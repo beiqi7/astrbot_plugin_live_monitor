@@ -9,7 +9,7 @@ from typing import TYPE_CHECKING, Any, Awaitable, Callable
 
 from astrbot.api import logger
 
-from ..platforms import check_room
+from ..platforms import check_room, fetch_options
 from ..platforms.base import LiveInfo
 from .storage import DataManager, RoomRecord, room_key
 
@@ -56,12 +56,6 @@ class LiveMonitor:
         except Exception:
             v = 60
         return max(15, v)
-
-    def _timeout(self) -> float:
-        try:
-            return float(self._cfg().get("request_timeout", 12) or 12)
-        except Exception:
-            return 12.0
 
     async def start(self) -> None:
         if self._running:
@@ -111,23 +105,14 @@ class LiveMonitor:
                 mark_primed=lambda k: self._primed.add(k),
             )
             # 轮询中新同步到的已开播房间，立刻推送
-            live_to_notify = stats.get("live_to_notify") or []
-            if live_to_notify:
-                global_at_all = bool(cfg.get("at_all_on_live", False))
+            pending = stats.get("live_to_notify") or []
+            if pending:
                 self.notifier.reload_config(cfg)
-                for rec, info in live_to_notify:
-                    try:
-                        n = await self.notifier.notify_live(
-                            rec, info, global_at_all=global_at_all
-                        )
-                        logger.info(
-                            f"轮询同步新加已开播房间已推送: "
-                            f"{rec.platform}:{rec.room_id} 成功={n}"
-                        )
-                    except Exception as e:
-                        logger.warning(
-                            f"轮询同步推送失败 {rec.platform}:{rec.room_id}: {e}"
-                        )
+                await self.notifier.notify_pending_live(
+                    pending,
+                    global_at_all=bool(cfg.get("at_all_on_live", False)),
+                    source="轮询同步",
+                )
         except Exception as e:
             logger.debug(f"轮询前配置同步跳过: {e}")
 
@@ -138,9 +123,7 @@ class LiveMonitor:
 
         cfg = self._cfg()
         self.notifier.reload_config(cfg)
-        timeout = self._timeout()
-        bili_cookie = str(cfg.get("bilibili_cookie", "") or "")
-        dy_cookie = str(cfg.get("douyin_cookie", "") or "")
+        opts = fetch_options(cfg)
         global_at_all = bool(cfg.get("at_all_on_live", False))
 
         # 清理已不在监控列表的房间的失败/冷却记录
@@ -157,13 +140,7 @@ class LiveMonitor:
 
         async def _one(rec: RoomRecord) -> None:
             async with sem:
-                await self._check_room(
-                    rec,
-                    timeout=timeout,
-                    bilibili_cookie=bili_cookie,
-                    douyin_cookie=dy_cookie,
-                    global_at_all=global_at_all,
-                )
+                await self._check_room(rec, global_at_all=global_at_all, **opts)
 
         await asyncio.gather(*[_one(r) for r in rooms], return_exceptions=True)
 
@@ -291,16 +268,4 @@ class LiveMonitor:
         self._cooldown_until[key] = time.time() + cooldown
         logger.warning(
             f"房间 {key} 连续失败 {count} 次，进入冷却 {int(cooldown)}s: {error}"
-        )
-
-    async def check_one_now(
-        self, platform: str, room_id: str
-    ) -> LiveInfo:
-        cfg = self._cfg()
-        return await check_room(
-            platform,
-            room_id,
-            timeout=self._timeout(),
-            bilibili_cookie=str(cfg.get("bilibili_cookie", "") or ""),
-            douyin_cookie=str(cfg.get("douyin_cookie", "") or ""),
         )

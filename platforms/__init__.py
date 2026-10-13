@@ -8,7 +8,7 @@ from .base import (
     normalize_cover_url,
     normalize_platform,
 )
-from .registry import get_checker, check_room, list_platforms
+from .registry import fetch_options, get_checker, check_room, list_platforms
 
 __all__ = [
     "LiveInfo",
@@ -19,5 +19,6 @@ __all__ = [
     "extract_room_id",
     "get_checker",
     "check_room",
+    "fetch_options",
     "list_platforms",
 ]
